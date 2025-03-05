@@ -199,51 +199,43 @@ class hmf_emulator(Aemulator):
         output = np.array([gp.predict(y, cos_arr)[0] for y,gp in zip(means, self.GP_list)])
         return np.dot(self.rotation_matrix, output).flatten()
 
-    def set_cosmology(self, params):
+    def set_cosmology(self, params, transfer_function = 'boltzmann_camb'):
         """
         Set the cosmological parameters of the emulator. One must
-        call this function before actually computing mass functions.
+        call this function before actually computing the bias.
         :param params:
             A dictionary of parameters, where the key is the parameter name and
             value is its value.
         :return:
             None
         """
-        try:
-            from classy import Class
-        except ImportError:
-            print("Class not installed. Cannot compute the mass function "+
-                  "directly, only predict "+
-                  "parameters from the GPs using the predict() function.")
-            return
-
-        self.mf_slopes_and_intercepts = self.predict(params)
+        
+        #DHAYAA: I rewrite all of this to use pyccl instead of classy
+        
+        self.bias_slopes_and_intercepts = self.predict(params)
+        
         #Set up a CLASS dictionary
         self.h = params['H0']/100.
         self.Omega_m = (params["omega_b"]+params["omega_cdm"])/self.h**2
-        class_cosmology = {
-            'output': 'mPk',
-            'H0':           params['H0'],
-            'ln10^{10}A_s': params['ln10As'],
-            'n_s':          params['n_s'],
-            'w0_fld':       params['w0'],
-            'wa_fld':       0.0,
-            'omega_b':      params['omega_b'],
-            'omega_cdm':    params['omega_cdm'],
-            'Omega_Lambda': 1 - self.Omega_m,
-            'N_eff':        params['N_eff'],
-            'P_k_max_1/Mpc': 10.,
-            'z_max_pk':      5.03
-        }
-        #Seed splines in CLASS
-        cc = Class()
-        cc.set(class_cosmology)
-        cc.compute()
+        
+        cosmo = ccl.Cosmology(Omega_c = params['omega_cdm']/self.h**2, 
+                              Omega_b = params['omega_b']/self.h**2, 
+                              h       = self.h,
+                              A_s     = np.exp(params['ln10As'])/1e10, 
+                              n_s     = params['n_s'],
+                              w       = params['w0'],
+                              wa      = 0.0,
+                              Neff    = params['N_eff'],
+                              transfer_function = transfer_function, matter_power_spectrum='linear')
+        
+        cosmo._pk_lin = {}
+        cosmo._pk_nl  = {}
+    
         #Make everything attributes
-        self.cc = cc
+        self.cc = cosmo
         self.k = np.logspace(-5, 1, num=1000) # Mpc^-1 comoving
         self.M = np.logspace(10, 16.5, num=1000) # Msun/h
-        self.computed_sigma2    = {}
+        self.computed_sigma2      = {}
         self.computed_dsigma2dM = {}
         self.computed_sigma2_splines = {}
         self.computed_dsigma2dM_splines = {}
@@ -272,10 +264,16 @@ class hmf_emulator(Aemulator):
         Nk = len(k)
         NM = len(M)
         kh = k/h #h/Mpc
+        
+        
+        #Compute linear power in here to avoid pickling problems.
+        self.cc.compute_linear_power()
+
         for i,z in enumerate(np.atleast_1d(redshifts)):
             if z in self.computed_sigma2.keys():
                 continue
-            p = np.array([self.cc.pk_lin(ki, z) for ki in k])*h**3 #[Mpc/h]^3
+            p = ccl.linear_matter_power(self.cc, k, a = 1/(1 + z))*h**3 #[Mpc/h]^3
+
             sigma2    = np.zeros_like(M)
             dsigma2dM = np.zeros_like(M)
             _lib.sigma2_at_M_arr(   _dc(M), NM, _dc(kh), _dc(p), Nk, Omega_m, _dc(sigma2))
@@ -286,6 +284,11 @@ class hmf_emulator(Aemulator):
             self.computed_dsigma2dM_splines[z] = IUS(np.log(self.M), dsigma2dM)
             self.computed_pk[z] = p
             continue
+        
+        #Remove any swigpy objects so you don't get other pickling errors....
+        self.cc._pk_lin = {}
+        self.cc._pk_nl  = {}
+        
         return
 
     def dndM(self, Masses, redshifts):
