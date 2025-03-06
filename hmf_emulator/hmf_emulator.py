@@ -228,6 +228,7 @@ class hmf_emulator(Aemulator):
                               Neff    = params['N_eff'],
                               transfer_function = transfer_function, matter_power_spectrum='linear')
         
+        cosmo.compute_sigma()
         cosmo._pk_lin = {}
         cosmo._pk_nl  = {}
     
