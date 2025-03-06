@@ -6,7 +6,7 @@ import cffi, glob, os, inspect, pickle, warnings
 import scipy.optimize as op
 from scipy.interpolate import InterpolatedUnivariateSpline as IUS
 import george
-from classy import Class
+import pyccl as ccl
 
 #Create the CFFI library
 hmf_dir = os.path.dirname(__file__)
